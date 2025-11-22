@@ -13,22 +13,31 @@
 ```
 ZIP File (Your Code)
        ↓
-   UPLOAD to /upload endpoint
+   UPLOAD to /upload or /upload-analyze endpoint
        ↓
    BACKEND ANALYSIS:
    ├─ Extract files
    ├─ Count lines of code (LOC)
    ├─ Find imports/dependencies
+   ├─ Extract functions/classes ⭐ NEW
    ├─ Build dependency graph
    ├─ Calculate risk scores
    └─ Identify circular dependencies
        ↓
    JSON RESPONSE with:
    ├─ Summary (total files, LOC, top risky)
-   ├─ Nodes (file-by-file analysis)
+   ├─ Nodes (file-by-file analysis + functions_classes) ⭐ NEW
    ├─ Edges (dependency map)
-   └─ Components (code clusters)
+   ├─ Components (code clusters)
+   └─ repo_id for function-level queries ⭐ NEW
 ```
+
+**NEW FEATURES** ⭐:
+- Extract all functions/classes with line numbers
+- Query where specific functions are called
+- Analyze function dependencies
+- Two new endpoints for detailed function analysis
+
 
 ---
 
@@ -131,9 +140,9 @@ open http://localhost:8000/docs
 
 ---
 
-## 📤 API Endpoint
+## 📤 API Endpoints
 
-### **POST /upload**
+### **POST /upload** (Original Analysis)
 
 **Request**:
 ```bash
@@ -148,43 +157,137 @@ curl -X POST \
   "summary": {
     "total_files": 25,
     "total_loc": 5420,
-    "top_5_risky": [
-      {
-        "path": "utils/logger.js",
-        "risk": 9.4,
-        "loc": 4,
-        "imported_by": 3
-      },
-      {
-        "path": "services/user.js",
-        "risk": 9.0,
-        "loc": 42,
-        "imported_by": 8
-      }
-    ]
+    "top_5_risky": [...]
   },
-  "nodes": {
-    "utils/logger.js": {
-      "path": "utils/logger.js",
-      "loc": 4,
-      "imports": [],
-      "imported_by_count": 3,
-      "imports_count": 0,
-      "risk": 9.4
-    }
-  },
-  "edges": [
-    {"from": "index.js", "to": "utils/logger.js"},
-    {"from": "services/user.js", "to": "utils/logger.js"}
-  ],
-  "components": [
-    {
-      "size": 3,
-      "members_sample": ["file1.js", "file2.js", "file3.js"]
-    }
-  ]
+  "nodes": {...},
+  "edges": [...],
+  "components": [...]
 }
 ```
+
+---
+
+### **POST /upload-analyze** ⭐ NEW
+
+**Enhanced Upload with Function/Class Details**
+
+**Request**:
+```bash
+curl -X POST \
+  -F "file=@myproject.zip" \
+  http://localhost:8000/upload-analyze
+```
+
+**Response** (200 OK):
+```json
+{
+  "status": "success",
+  "repo_id": "550e8400-e29b-41d4-a716-446655440000",
+  "total_files": 11,
+  "total_edges": 21,
+  "total_loc": 649,
+  "nodes": {
+    "services/userService.js": {
+      "loc": 67,
+      "imports": ["../utils/logger"],
+      "imported_by": ["./app.js"],
+      "risk": 12.4,
+      "functions_classes": [
+        {
+          "name": "UserService",
+          "type": "class",
+          "line_start": 8
+        },
+        {
+          "name": "createUser",
+          "type": "method",
+          "line_start": 12,
+          "parent_class": "UserService"
+        }
+      ]
+    }
+  },
+  "edges": [...],
+  "top_10_risky": [...]
+}
+```
+
+**Key Features**:
+- ✨ Returns all existing analysis (files, LOC, risk)
+- ✨ **NEW**: Includes `functions_classes` array with line numbers
+- ✨ Returns `repo_id` for querying function details
+- ✨ Enables function-level analysis
+
+---
+
+### **GET /function-details/{repo_id}/{file_path}/{function_name}** ⭐ NEW
+
+**Get Function Call Sites and Dependencies**
+
+**Request**:
+```bash
+curl http://localhost:8000/function-details/550e8400-e29b-41d4-a716-446655440000/services/userService.js/createUser
+```
+
+**Response** (200 OK):
+```json
+{
+  "status": "success",
+  "function_name": "createUser",
+  "file": "services/userService.js",
+  "call_sites_table": {
+    "title": "Where \"createUser\" is called",
+    "columns": ["File", "Line Number", "Code"],
+    "rows": [
+      {
+        "file": "controllers/userController.js",
+        "line": 13,
+        "code": "const user = this.userService.createUser(email, name, password);"
+      },
+      {
+        "file": "app.js",
+        "line": 45,
+        "code": "userService.createUser('test@example.com', 'Test', 'pass');"
+      }
+    ],
+    "count": 2
+  },
+  "dependencies_table": {
+    "title": "What \"createUser\" depends on",
+    "columns": ["Dependency Name", "Line Number", "Code"],
+    "rows": [
+      {
+        "name": "info",
+        "line": 16,
+        "code": "logger.info('Creating new user', { email, name });"
+      },
+      {
+        "name": "register",
+        "line": 19,
+        "code": "const user = this.authService.register(email, name, password);"
+      },
+      {
+        "name": "success",
+        "line": 20,
+        "code": "logger.success('User created successfully', { userId: user.id });"
+      }
+    ],
+    "count": 3
+  }
+}
+```
+
+**Key Features**:
+- 📍 **Table 1**: Shows every file/line where this function is called
+- 🔗 **Table 2**: Shows every function this function depends on
+- 📝 Includes actual code snippets for context
+- 🎯 Enables frontend to show detailed function analysis
+
+**Usage Flow**:
+1. Call `POST /upload-analyze` to get repo_id and functions_classes list
+2. User clicks on a function in the frontend
+3. Call `GET /function-details/{repo_id}/{file}/{function}` 
+4. Display two tables with call sites and dependencies
 
 ---
 

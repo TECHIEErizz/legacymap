@@ -41,10 +41,25 @@ def normalize_import_path(import_path, from_file, repo_root):
     if import_path.startswith('.') or import_path.startswith('/'):
         base = os.path.dirname(from_file)
         candidate = os.path.normpath(os.path.join(base, import_path))
-        for ext in ['.js', '.ts', '.py', '/index.js', '/index.ts']:
-            p = candidate + ext if not candidate.endswith(ext) else candidate
-            if os.path.exists(p):
+        
+        # Try with various extensions
+        for ext in ['', '.js', '.ts', '.py', '/index.js', '/index.ts', '/index.py']:
+            if ext and not candidate.endswith(ext):
+                p = candidate + ext
+            else:
+                p = candidate
+            
+            if os.path.isfile(p):
                 return os.path.relpath(p, repo_root)
+        
+        # If no file found, try as directory with index
+        if os.path.isdir(candidate):
+            for idx_name in ['index.js', 'index.ts', 'index.py']:
+                idx_path = os.path.join(candidate, idx_name)
+                if os.path.isfile(idx_path):
+                    return os.path.relpath(idx_path, repo_root)
+        
+        # Return as-is if not found
         return os.path.relpath(candidate, repo_root)
     else:
         return import_path.split('/')[0]

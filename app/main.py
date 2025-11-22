@@ -49,6 +49,14 @@ from .utils import extract_zip_to_temp, cleanup
 #   Uses: tempfile.mkdtemp(), ZipFile.extractall()
 #   Called at: Line 32
 
+from . import scanner
+# MODULE: scanner.py - Code analysis functions
+#   Functions: is_source_file(), read_file_lines(), count_loc(), extract_imports(), normalize_import_path()
+
+from .function_extractor import extract_functions_and_classes, find_function_calls, find_function_dependencies
+# MODULE: function_extractor.py - Function/class extraction
+#   Functions: extract_functions_and_classes(), find_function_calls(), find_function_dependencies()
+
 # FUNCTION 2: cleanup (Source: utils.py:12-17)
 #   Parameters: path (str)
 #   Returns: None
@@ -602,3 +610,178 @@ async def upload_zip(file: UploadFile = File(...)):
 #  Return JSON to client
 #
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW ENDPOINTS FOR FUNCTION/CLASS DETAILS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Store uploaded repo paths for later queries (in production use database)
+_uploaded_repos = {}
+
+@app.post("/upload-analyze")
+async def upload_and_analyze(file: UploadFile = File(...)):
+    """
+    Upload ZIP and return detailed analysis with function/class information
+    Response includes line numbers and metadata for each function/class
+    """
+    local_zip = f"/tmp/{uuid.uuid4()}.zip"
+    
+    try:
+        # Save uploaded file
+        with open(local_zip, "wb") as f:
+            f.write(await file.read())
+        
+        # Extract ZIP
+        repo_root = extract_zip_to_temp(local_zip)
+        repo_id = str(uuid.uuid4())
+        _uploaded_repos[repo_id] = repo_root
+        
+        # Initialize structures
+        nodes = {}
+        functions_by_file = {}
+        
+        # Find all source files
+        source_files = []
+        for root, dirs, files in os.walk(repo_root):
+            for f in files:
+                if scanner.is_source_file(f):
+                    full_path = os.path.join(root, f)
+                    rel_path = os.path.relpath(full_path, repo_root)
+                    source_files.append((rel_path, full_path))
+                    
+                    # Extract functions/classes for this file
+                    functions_classes = extract_functions_and_classes(full_path)
+                    functions_by_file[rel_path] = functions_classes
+        
+        # Build nodes
+        for rel_path, full_path in source_files:
+            lines = scanner.read_file_lines(full_path)
+            loc = scanner.count_loc(lines)
+            imports = scanner.extract_imports(lines)
+            
+            nodes[rel_path] = {
+                'loc': loc,
+                'imports': [],
+                'imported_by': [],
+                'imports_count': 0,
+                'imported_by_count': 0,
+                'risk': 0,
+                'functions_classes': functions_by_file.get(rel_path, [])
+            }
+        
+        # Build dependency graph (same as before)
+        graph = defaultdict(list)
+        reverse_graph = defaultdict(list)
+        edges = []
+        
+        for rel_path, full_path in source_files:
+            lines = scanner.read_file_lines(full_path)
+            imports = scanner.extract_imports(lines)
+            
+            for imp in imports:
+                normalized = scanner.normalize_import_path(imp, full_path, repo_root)
+                
+                for target_rel_path in nodes.keys():
+                    target_full_path = os.path.join(repo_root, target_rel_path)
+                    if os.path.normpath(normalized) == os.path.normpath(target_full_path):
+                        if target_rel_path not in nodes[rel_path]['imports']:
+                            nodes[rel_path]['imports'].append(target_rel_path)
+                            graph[rel_path].append(target_rel_path)
+                            reverse_graph[target_rel_path].append(rel_path)
+                            edges.append({'source': rel_path, 'target': target_rel_path})
+                        break
+        
+        # Calculate counts and risk
+        for file_path in nodes.keys():
+            nodes[file_path]['imports_count'] = len(nodes[file_path]['imports'])
+            nodes[file_path]['imported_by_count'] = len(reverse_graph[file_path])
+        
+        for k, meta in nodes.items():
+            risk = (meta['loc'] / 10.0) + (meta['imported_by_count'] * 3.0) + (meta['imports_count'] * 2.0)
+            nodes[k]['risk'] = round(risk, 2)
+        
+        sorted_nodes = sorted(nodes.items(), key=lambda x: x[1]['risk'], reverse=True)
+        
+        return {
+            'status': 'success',
+            'repo_id': repo_id,
+            'total_files': len(nodes),
+            'total_edges': len(edges),
+            'total_loc': sum(meta['loc'] for meta in nodes.values()),
+            'nodes': nodes,
+            'edges': edges,
+            'top_10_risky': [
+                {
+                    'file': file_path,
+                    'risk': meta['risk'],
+                    'loc': meta['loc'],
+                    'imported_by': meta['imported_by_count'],
+                    'imports': meta['imports_count'],
+                    'functions_classes': meta['functions_classes']
+                }
+                for file_path, meta in sorted_nodes[:10]
+            ]
+        }
+    
+    finally:
+        if os.path.exists(local_zip):
+            os.remove(local_zip)
+
+
+@app.get("/function-details/{repo_id}/{file_path}/{function_name}")
+async def get_function_details(repo_id: str, file_path: str, function_name: str):
+    """
+    Get detailed information about a specific function:
+    - Where it's called (all call sites with line numbers)
+    - Its dependencies (what it uses)
+    
+    Returns 2 tables of data for frontend display
+    """
+    if repo_id not in _uploaded_repos:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    
+    repo_root = _uploaded_repos[repo_id]
+    full_file_path = os.path.join(repo_root, file_path)
+    
+    if not os.path.exists(full_file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # TABLE 1: Where this function is called
+    call_sites = []
+    for root, dirs, files in os.walk(repo_root):
+        for file in files:
+            if scanner.is_source_file(file):
+                fpath = os.path.join(root, file)
+                rpath = os.path.relpath(fpath, repo_root)
+                
+                # Find all calls to this function
+                calls = find_function_calls(fpath, function_name)
+                for call in calls:
+                    call_sites.append({
+                        'file': rpath,
+                        'line': call['line'],
+                        'code': call['code']
+                    })
+    
+    # TABLE 2: Dependencies of this function
+    dependencies = find_function_dependencies(full_file_path, function_name)
+    
+    return {
+        'status': 'success',
+        'function_name': function_name,
+        'file': file_path,
+        'call_sites_table': {
+            'title': f'Where "{function_name}" is called',
+            'columns': ['File', 'Line Number', 'Code'],
+            'rows': call_sites,
+            'count': len(call_sites)
+        },
+        'dependencies_table': {
+            'title': f'What "{function_name}" depends on',
+            'columns': ['Dependency Name', 'Line Number', 'Code'],
+            'rows': dependencies,
+            'count': len(dependencies)
+        }
+    }
+
