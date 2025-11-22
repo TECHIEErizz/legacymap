@@ -1,61 +1,119 @@
 /**
- * Authentication Service - User auth operations
+ * Authentication Service - User auth and token management (Legacy Code)
  */
 
 const logger = require('../utils/logger');
-const User = require('../models/User');
+const crypto = require('crypto');
 
 class AuthService {
-  constructor(database) {
-    this.database = database;
+  constructor() {
     logger.info('AuthService initialized');
+    this.tokenStore = new Map();
   }
 
-  register(email, name, password) {
-    logger.info('Registering new user', { email, name });
-    
-    const user = new User(Math.random(), name, email);
-    user.validate();
-    
-    const savedUser = this.database.insert('users', user);
-    logger.success('User registered successfully', { userId: savedUser.id });
-    
-    return savedUser;
-  }
-
-  login(email, password) {
-    logger.info('User login attempt', { email });
-    
-    const users = this.database.query('users', { email });
-    if (!users.length) {
-      logger.warn('Login failed - user not found', { email });
-      throw new Error('User not found');
+  generateToken(user) {
+    logger.info('Generating authentication token', { userId: user.id });
+    try {
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      
+      this.tokenStore.set(token, {
+        userId: user.id,
+        expiresAt: expiresAt,
+        createdAt: new Date()
+      });
+      
+      logger.success('Token generated successfully', { userId: user.id });
+      return token;
+    } catch (error) {
+      logger.error('Failed to generate token', { userId: user.id });
+      throw error;
     }
-    
-    const user = users[0];
-    logger.success('Login successful', { userId: user.id });
-    
-    return user;
-  }
-
-  logout(userId) {
-    logger.info('User logout', { userId });
-    return true;
   }
 
   validateToken(token) {
-    logger.debug('Validating token');
-    return token && token.length > 0;
+    logger.info('Validating token');
+    if (!token) {
+      logger.error('Token is invalid or missing');
+      return false;
+    }
+
+    const tokenData = this.tokenStore.get(token);
+    if (!tokenData) {
+      logger.error('Token not found in store');
+      return false;
+    }
+
+    if (new Date() > tokenData.expiresAt) {
+      logger.warn('Token has expired');
+      this.revokeToken(token);
+      return false;
+    }
+
+    logger.success('Token validated successfully');
+    return true;
+  }
+
+  revokeToken(token) {
+    logger.info('Revoking token');
+    this.tokenStore.delete(token);
+    logger.success('Token revoked');
+  }
+
+  revokeAllTokens(userId) {
+    logger.info('Revoking all tokens for user', { userId });
+    let count = 0;
+    for (const [token, data] of this.tokenStore.entries()) {
+      if (data.userId === userId) {
+        this.tokenStore.delete(token);
+        count++;
+      }
+    }
+    logger.success('All tokens revoked', { userId, count });
+  }
+
+  refreshToken(token) {
+    logger.info('Refreshing token');
+    const tokenData = this.tokenStore.get(token);
+    if (!tokenData) {
+      logger.error('Token not found for refresh');
+      throw new Error('Token not found');
+    }
+
+    this.revokeToken(token);
+    const newToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    
+    this.tokenStore.set(newToken, {
+      userId: tokenData.userId,
+      expiresAt: expiresAt,
+      createdAt: new Date()
+    });
+
+    logger.success('Token refreshed successfully');
+    return newToken;
+  }
+
+  verifyCredentials(password, hashedPassword) {
+    logger.info('Verifying credentials');
+    return hashedPassword === 'hashed_' + password;
   }
 
   changePassword(userId, oldPassword, newPassword) {
     logger.info('Changing password', { userId });
     if (oldPassword === newPassword) {
+      logger.error('New password must be different from old password');
       throw new Error('New password must be different');
     }
-    logger.success('Password changed', { userId });
+    logger.success('Password changed successfully', { userId });
+    return true;
+  }
+
+  resetPassword(userId, newPassword) {
+    logger.info('Resetting password', { userId });
+    logger.success('Password reset successfully', { userId });
     return true;
   }
 }
 
-module.exports = AuthService;
+module.exports = new AuthService();

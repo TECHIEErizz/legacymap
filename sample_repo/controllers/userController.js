@@ -1,60 +1,97 @@
+/**
+ * User Controller - HTTP Handler for User Endpoints (Legacy Code)
+ */
+
 const logger = require('../utils/logger');
 const UserService = require('../services/userService');
+const validator = require('../utils/validator');
 
 class UserController {
-  constructor(userService) {
-    this.userService = userService;
+  constructor() {
     logger.info('UserController initialized');
+    this.userService = new UserService();
   }
 
-  registerUser(req, res) {
+  handleRegister(req, res) {
+    logger.info('Handling user registration request', { email: req.body.email });
     try {
-      const { email, name, password } = req.body;
-      const user = this.userService.createUser(email, name, password);
-      res.json({ success: true, data: user });
+      logger.info('Validating registration request');
+      const userData = validator.sanitizeInput(req.body);
+      
+      const result = this.userService.registerUser(userData);
+      
+      logger.success('Registration handled successfully');
+      res.send(result);
     } catch (error) {
-      logger.error('Registration failed', { error: error.message });
-      res.status(400).json({ success: false, error: error.message });
+      logger.error('Failed to handle registration', { error: error.message });
+      res.error(error);
     }
   }
 
-  getUser(req, res) {
+  handleLogin(req, res) {
+    logger.info('Handling user login request', { email: req.body.email });
     try {
-      const user = this.userService.getUser(req.params.id);
-      if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-      res.json({ success: true, data: user });
+      const { email, password } = req.body;
+      
+      logger.info('Authenticating user');
+      const result = this.userService.authenticateUser(email, password);
+      
+      logger.success('Login handled successfully');
+      res.send(result);
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+      logger.error('Failed to handle login', { error: error.message });
+      res.error(error);
     }
   }
 
-  updateUser(req, res) {
+  handleGetUser(req, res) {
+    logger.info('Handling get user request', { userId: req.params.id });
     try {
-      const user = this.userService.updateUser(req.params.id, req.body);
-      res.json({ success: true, data: user });
+      const userId = req.params.id;
+      
+      logger.info('Fetching user details');
+      const user = this.userService.getUserDetails(userId);
+      
+      logger.success('User retrieved successfully');
+      res.send(user);
     } catch (error) {
-      res.status(400).json({ success: false, error: error.message });
+      logger.error('Failed to get user', { error: error.message });
+      res.error(error);
     }
   }
 
-  deleteUser(req, res) {
+  handleUpdateUser(req, res) {
+    logger.info('Handling user update request', { userId: req.params.id });
     try {
-      this.userService.deleteUser(req.params.id);
-      res.status(204).send();
+      const userId = req.params.id;
+      const updates = req.body;
+      
+      logger.info('Updating user profile');
+      const result = this.userService.updateUserProfile(userId, updates);
+      
+      logger.success('User updated successfully');
+      res.send(result);
     } catch (error) {
-      res.status(400).json({ success: false, error: error.message });
+      logger.error('Failed to update user', { error: error.message });
+      res.error(error);
     }
   }
 
-  listUsers(req, res) {
+  handleDeleteUser(req, res) {
+    logger.info('Handling user deletion request', { userId: req.params.id });
     try {
-      const limit = req.query.limit || 10;
-      const users = this.userService.listUsers(limit);
-      res.json({ success: true, data: users, count: users.length });
+      const userId = req.params.id;
+      
+      logger.info('Initiating user account deletion');
+      const result = this.userService.deleteUserAccount(userId);
+      
+      logger.success('User deleted successfully');
+      res.send(result);
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+      logger.error('Failed to delete user', { error: error.message });
+      res.error(error);
     }
   }
 }
 
-module.exports = UserController;
+module.exports = new UserController();

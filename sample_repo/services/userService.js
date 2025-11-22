@@ -1,84 +1,178 @@
 /**
- * User Service - User business logic
+ * User Service - Business Logic Layer (Legacy Code)
+ * Orchestrates user operations across multiple repositories
  */
 
+const UserRepository = require('../repositories/userRepository');
+const DatabaseConnection = require('../database/connection');
 const logger = require('../utils/logger');
-const User = require('../models/User');
+const emailService = require('./emailService');
+const authService = require('./authService');
 
 class UserService {
-  constructor(database, authService) {
-    this.database = database;
-    this.authService = authService;
+  constructor() {
     logger.info('UserService initialized');
+    this.database = new DatabaseConnection('localhost', 5432, 'legacy_db');
+    this.repository = new UserRepository(this.database);
+    this.database.connect();
   }
 
-  createUser(email, name, password) {
-    logger.info('Creating new user', { email, name });
+  registerUser(userData) {
+    logger.info('Starting user registration', { email: userData.email });
     
     try {
-      const user = this.authService.register(email, name, password);
-      logger.success('User created successfully', { userId: user.id });
-      return user;
+      if (!this.validateRegistrationData(userData)) {
+        logger.error('Invalid registration data');
+        throw new Error('Invalid registration data');
+      }
+
+      const existingUser = this.repository.findByEmail(userData.email);
+      if (existingUser) {
+        logger.error('User already exists', { email: userData.email });
+        throw new Error('User already exists');
+      }
+
+      const newUser = this.repository.create(userData);
+      logger.success('User registered successfully', { userId: newUser.id });
+
+      this.sendWelcomeEmail(newUser);
+
+      const token = authService.generateToken(newUser);
+      logger.info('Authentication token generated', { userId: newUser.id });
+
+      return {
+        success: true,
+        user: newUser,
+        token: token
+      };
     } catch (error) {
-      logger.error('Failed to create user', { email, error: error.message });
+      logger.error('User registration failed', { email: userData.email });
+      this.handleRegistrationError(error);
       throw error;
     }
   }
 
-  getUser(userId) {
-    logger.info('Fetching user', { userId });
+  authenticateUser(email, password) {
+    logger.info('User authentication attempt', { email });
     
-    const users = this.database.query('users');
-    const user = users.find(u => u.id === userId);
-    
-    if (!user) {
-      logger.warn('User not found', { userId });
-      return null;
+    try {
+      const user = this.repository.findByEmail(email);
+      if (!user) {
+        logger.error('User not found', { email });
+        throw new Error('User not found');
+      }
+
+      const isPasswordValid = this.verifyPassword(password, user.password);
+      if (!isPasswordValid) {
+        logger.error('Invalid password', { email });
+        this.logFailedAttempt(email);
+        throw new Error('Invalid credentials');
+      }
+
+      const token = authService.generateToken(user);
+      logger.success('User authenticated successfully', { userId: user.id });
+
+      return {
+        success: true,
+        user: user,
+        token: token
+      };
+    } catch (error) {
+      logger.error('Authentication failed', { email });
+      throw error;
     }
-    
-    return user;
   }
 
-  updateUser(userId, updates) {
-    logger.info('Updating user', { userId, updates });
+  updateUserProfile(userId, updates) {
+    logger.info('Updating user profile', { userId });
     
-    const user = this.getUser(userId);
-    if (!user) {
-      throw new Error('User not found');
+    try {
+      const user = this.repository.findById(userId);
+      if (!user) {
+        logger.error('User not found', { userId });
+        throw new Error('User not found');
+      }
+
+      if (!this.validateUpdateData(updates)) {
+        logger.error('Invalid update data');
+        throw new Error('Invalid update data');
+      }
+
+      this.repository.update(userId, updates);
+      logger.success('User profile updated', { userId });
+
+      this.sendProfileUpdateNotification(userId, updates);
+
+      return { success: true };
+    } catch (error) {
+      logger.error('Failed to update profile', { userId });
+      throw error;
     }
-    
-    const updated = this.database.update('users', userId, updates);
-    logger.success('User updated successfully', { userId });
-    
-    return updated;
   }
 
-  deleteUser(userId) {
-    logger.info('Deleting user', { userId });
+  deleteUserAccount(userId) {
+    logger.info('Deleting user account', { userId });
     
-    const deleted = this.database.delete('users', userId);
-    logger.success('User deleted successfully', { userId });
-    
-    return deleted;
+    try {
+      const user = this.repository.findById(userId);
+      if (!user) {
+        logger.error('User not found', { userId });
+        throw new Error('User not found');
+      }
+
+      this.repository.delete(userId);
+      logger.success('User account deleted', { userId });
+
+      this.sendFarewellEmail(user);
+
+      authService.revokeAllTokens(userId);
+
+      return { success: true };
+    } catch (error) {
+      logger.error('Failed to delete account', { userId });
+      throw error;
+    }
   }
 
-  listUsers(limit = 10) {
-    logger.info('Listing users', { limit });
-    
-    const users = this.database.query('users').slice(0, limit);
-    logger.info('Users listed', { count: users.length });
-    
-    return users;
+  validateRegistrationData(userData) {
+    logger.info('Validating registration data');
+    if (!userData.email || !userData.name || !userData.password) {
+      return false;
+    }
+    return true;
   }
 
-  activateUser(userId) {
-    logger.info('Activating user', { userId });
-    return this.updateUser(userId, { isActive: true });
+  validateUpdateData(updates) {
+    logger.info('Validating update data');
+    return true;
   }
 
-  deactivateUser(userId) {
-    logger.info('Deactivating user', { userId });
-    return this.updateUser(userId, { isActive: false });
+  verifyPassword(password, hashedPassword) {
+    logger.info('Verifying password');
+    return hashedPassword === 'hashed_' + password;
+  }
+
+  sendWelcomeEmail(user) {
+    logger.info('Sending welcome email', { email: user.email });
+    emailService.sendWelcomeEmail(user);
+  }
+
+  sendProfileUpdateNotification(userId, updates) {
+    logger.info('Sending profile update notification', { userId });
+    emailService.sendUpdateNotification(userId, updates);
+  }
+
+  sendFarewellEmail(user) {
+    logger.info('Sending farewell email', { email: user.email });
+    emailService.sendFarewellEmail(user);
+  }
+
+  handleRegistrationError(error) {
+    logger.error('Handling registration error', { message: error.message });
+  }
+
+  logFailedAttempt(email) {
+    logger.info('Failed login attempt logged', { email });
   }
 }
 
