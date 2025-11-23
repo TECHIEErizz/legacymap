@@ -8,7 +8,7 @@ IMPORT_PATTERNS = [
 ]
 
 def is_source_file(path):
-    return path.endswith(('.js','.ts','.py'))
+    return path.endswith(('.js','.ts','.py','.java'))
 
 def read_file_lines(path):
     try:

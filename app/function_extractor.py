@@ -25,7 +25,11 @@ def extract_functions_and_classes(file_path):
     method_pattern = re.compile(r'^\s*(async\s+)?def\s+(\w+)\s*\(')
     js_class_pattern = re.compile(r'^\s*class\s+(\w+)\s*\{')
     js_func_pattern = re.compile(r'^\s*function\s+(\w+)\s*\(')
-    js_method_pattern = re.compile(r'^\s*(\w+)\s*\(\)\s*\{')
+    js_method_pattern = re.compile(r'^\s*(\w+)\s*\([^)]*\)\s*\{')
+    
+    # Java patterns
+    java_class_pattern = re.compile(r'^\s*(public|private|protected)?\s*(static)?\s*class\s+(\w+)')
+    java_method_pattern = re.compile(r'^\s*(public|private|protected)?\s*(static)?\s*(\w+)\s+(\w+)\s*\([^)]*\)\s*\{')
     
     current_class = None
     
@@ -83,6 +87,36 @@ def extract_functions_and_classes(file_path):
             }
             functions_classes.append(item)
             continue
+        
+        # Java class
+        match = java_class_pattern.match(line)
+        if match:
+            class_name = match.group(3)
+            current_class = {
+                'name': class_name,
+                'type': 'class',
+                'line_start': i,
+                'language': 'java',
+                'parent_class': None
+            }
+            functions_classes.append(current_class)
+            current_class = class_name
+            continue
+        
+        # Java method
+        if isinstance(current_class, str):
+            match = java_method_pattern.match(line)
+            if match and line.strip() and not line.strip().startswith('//'):
+                method_name = match.group(4)
+                if method_name not in ['if', 'for', 'while', 'switch', 'catch']:
+                    item = {
+                        'name': method_name,
+                        'type': 'method',
+                        'line_start': i,
+                        'language': 'java',
+                        'parent_class': current_class
+                    }
+                    functions_classes.append(item)
         
         # JavaScript method (within class)
         if isinstance(current_class, str):

@@ -1,3 +1,6 @@
+print(">>> main.py is running <<<")
+
+
 # ╔═══════════════════════════════════════════════════════════════════════════════╗
 # ║                     LEGACYMAP BACKEND - MAIN APPLICATION                        ║
 # ║  Code Analysis Engine: Detects dependencies, calculates risk scores              ║
@@ -115,11 +118,28 @@ import networkx as nx
 #   Methods: add_node(), add_edge(), strongly_connected_components()
 #   Called at: Line 94
 
+from fastapi.middleware.cors import CORSMiddleware
+# CORS Middleware for frontend integration
+
 # ============================================================================
 # APPLICATION INITIALIZATION
 # ============================================================================
 
 app = FastAPI(title="LegacyMap AI - Hacker MVP Backend")
+
+# Add CORS middleware to allow frontend connections
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for now, restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+def home():
+    return {"message": "FastAPI is working!"}
 # CLASS INSTANCE: FastAPI application instance (Line 61)
 # Purpose: Main web application object
 # Methods: @app.post() decorator for endpoints
@@ -729,7 +749,7 @@ async def upload_and_analyze(file: UploadFile = File(...)):
             os.remove(local_zip)
 
 
-@app.get("/function-details/{repo_id}/{file_path}/{function_name}")
+@app.get("/function-details/{repo_id}")
 async def get_function_details(repo_id: str, file_path: str, function_name: str):
     """
     Get detailed information about a specific function:
@@ -784,4 +804,3 @@ async def get_function_details(repo_id: str, file_path: str, function_name: str)
             'count': len(dependencies)
         }
     }
-

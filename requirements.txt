@@ -3,3 +3,5 @@ uvicorn==0.22.0
 aiofiles==23.1.0
 python-multipart==0.0.6
 networkx==3.1
+pytest
+httpx
